@@ -1,0 +1,15 @@
+{
+  "last": "1.03",
+  "url": "https://raw.githubusercontent.com/Happy-legacy69/Tmarket/refs/heads/main/Tmarket.lua",
+  "config_url": "https://raw.githubusercontent.com/Happy-legacy69/Tmarket/main/market_price.ini",
+  "nicknames": [
+    {
+      "nick": "Alex_Greenfield",
+      "expiry": "2025-05-22"
+    },
+{
+      "nick": "TestNick3",
+      "expiry": "2025-10-10"
+    }
+  ]
+}
