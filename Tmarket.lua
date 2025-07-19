@@ -1,4 +1,4 @@
- script_name("Tmarket")
+script_name("Tmarket")
 script_author("legacy.")
 script_version("1.03")
 
@@ -18,7 +18,7 @@ local u8 = encoding.UTF8
 local configFolder = getWorkingDirectory() .. "\\Config\\Tmarket"
 local configPath = configFolder .. "\\market_price.ini"
 local cfgPath = configFolder .. "\\set.cfg"
-local updateURL = "https://raw.githubusercontent.com/Happy-legacy69/Tmarket/refs/heads/main/update.json"
+local updateURL = "https://raw.githubusercontent.com/legacy-Chay/Tmarket/refs/heads/main/update.json"
 local configURL, cachedNick = nil, nil
 local window = imgui.new.bool(false)
 local search = ffi.new("char[128]", "")
@@ -36,6 +36,11 @@ local buyInputChanged = false
 local sellInputChanged = false
 
 local lastWindowSize = {x = windowSize.x, y = windowSize.y}
+
+-- Добавлено для проверки срока действия
+local scriptExpired = false
+local hasScriptAccess = false 
+local accessExpirationDate = nil -- Переменная для хранения даты истечения доступа
 
 local function createConfigFolder()
     local attr = lfs.attributes(configFolder)
@@ -146,6 +151,18 @@ function asyncHttpRequest(method, url, args, resolve, reject)
     end)
 end
 
+-- Вспомогательная функция для проверки даты
+local function checkExpiration(dateString)
+    if not dateString then return false end 
+    local year, month, day = dateString:match("(%d%d%d%d)-(%d%d)-(%d%d)")
+    if not (year and month and day) then return false end 
+
+    local serverDate = os.time{year=tonumber(year), month=tonumber(month), day=tonumber(day)}
+    local currentDate = os.time(os.date("!*t")) 
+    
+    return currentDate > serverDate
+end
+
 function checkUpdates()
     local function onSuccess(response)
         if response.status_code == 200 then
@@ -156,15 +173,17 @@ function checkUpdates()
                 local newVersion, _ = data.version:gsub('%.', '')
                 local newVersion = tonumber(newVersion)
                 
-if newVersion > currentVersion then
-    sampAddChatMessage("{A47AFF}[Tmarket]{90EE90} Доступно обновление! Загрузка...", -1)
-    downloadUrlToFile(data.download, thisScript().path, function(id, status)
-        if status == moonloader.download_status.STATUSEX_ENDDOWNLOAD then
-            sampAddChatMessage("{A47AFF}[Tmarket]{90EE90} Скрипт обновлён. Перезагрузка...", -1)
-            thisScript():reload()
-        end
-    end)
-end
+                if scriptExpired or not hasScriptAccess then return end
+
+                if newVersion > currentVersion then
+                    sampAddChatMessage("{A47AFF}[Tmarket]{90EE90} Доступна новая версия скрипта. Идёт обновление...", -1)
+                    downloadUrlToFile(data.download, thisScript().path, function(id, status)
+                        if status == moonloader.download_status.STATUSEX_ENDDOWNLOAD then
+                            sampAddChatMessage("{A47AFF}[Tmarket]{90EE90} Скрипт обновлён.", -1)
+                            thisScript():reload()
+                        end
+                    end)
+                end
             end
         end
     end
@@ -191,57 +210,67 @@ local function checkNick(nick, callback)
         { headers = { ['content-type'] = 'application/json' } },
         function(response)
             if response.status_code ~= 200 then
-                sampAddChatMessage(string.format("{A47AFF}[Tmarket] {FF4C4C}Ошибка доступа к GitHub (код %d).", response.status_code), -1)
+                sampAddChatMessage("{A47AFF}[Tmarket] {FF4C4C}Не удалось получить данные с сервера для проверки.", -1)
                 callback(false)
                 return
             end
 
             local j = json.decode(response.text)
             if not j then
-                sampAddChatMessage("{A47AFF}[Tmarket] {FF4C4C}Ошибка декодирования данных с GitHub.", -1)
+                sampAddChatMessage("{A47AFF}[Tmarket] {FF4C4C}Ошибка при чтении данных сервера.", -1)
                 callback(false)
                 return
             end
 
             configURL = j.config_url
-            local hasAccess = false
-            for _, n in ipairs(j.nicknames or {}) do
-                if nick == n then hasAccess = true break end
-            end
+            local accessGranted = false
+            local nickExpirationDate = nil
 
-            -- Проверка срока действия скрипта
-            if j.expiry_date then
-                local currentTimestamp = os.time()
-                local expiryTimestamp = os.time({year=j.expiry_date.year, month=j.expiry_date.month, day=j.expiry_date.day})
-                if currentTimestamp > expiryTimestamp then
-                    sampAddChatMessage("{A47AFF}[Tmarket]{FF4C4C} Срок действия скрипта истёк. Обратитесь к разработчику.", -1)
-                    callback(false)
-                    return
+            if j.nicknames and type(j.nicknames) == "table" then
+                nickExpirationDate = j.nicknames[nick]
+                if nickExpirationDate then
+                    accessGranted = true
                 end
             end
             
-            callback(hasAccess)
+            -- Если ник не найден в списке и нет default_expiration_date, то доступ не предоставляется.
+            -- Если default_expiration_date есть, то используем её как запасной вариант.
+            if not accessGranted and j.default_expiration_date then
+                nickExpirationDate = j.default_expiration_date
+                accessGranted = true 
+            end
+
+
+            if accessGranted then
+                if checkExpiration(nickExpirationDate) then
+                    scriptExpired = true
+                    accessExpirationDate = nickExpirationDate -- Сохраняем дату истечения
+                    sampAddChatMessage(string.format("{A47AFF}[Tmarket]{FF4C4C} Срок действия скрипта для ника {FFD700}%s{FF4C4C} истёк ({FFD700}%s{FF4C4C}).", nick, nickExpirationDate), -1)
+                    thisScript():unload() 
+                    callback(false)
+                    return
+                else
+                    hasScriptAccess = true 
+                    accessExpirationDate = nickExpirationDate -- Сохраняем дату истечения
+                    callback(true)
+                end
+            else
+                sampAddChatMessage(string.format("{A47AFF}[Tmarket]{FFD700} %s{FFFFFF}, у вас {FF4C4C}нет доступа к скрипту{FFFFFF}.", nick), -1)
+                callback(false)
+            end
         end,
         function(error)
-            sampAddChatMessage(string.format("{A47AFF}[Tmarket] {FF4C4C}Ошибка при проверке ника или соединения: %s", tostring(error)), -1)
+            sampAddChatMessage(string.format("{A47AFF}[Tmarket] {FF4C4C}Ошибка при проверке ника: %s", tostring(error)), -1)
             callback(false)
         end
     )
 end
 
 local function downloadConfigFile(callback)
-    if not configURL then
-        sampAddChatMessage("{A47AFF}[Tmarket] {FF4C4C}Ошибка: URL конфигурации не найден.", -1)
-        callback()
-        return
-    end
-    sampAddChatMessage("{A47AFF}[Tmarket] {90EE90}Загрузка файла конфигурации...", -1)
+    if not configURL then callback() return end
     downloadUrlToFile(configURL, configPath, function(_, status)
         if status == moonloader.download_status.STATUSEX_ENDDOWNLOAD then
             convertAndRewrite(configPath)
-            callback()
-        elseif status == moonloader.download_status.STATUSEX_ERROR then
-            sampAddChatMessage("{A47AFF}[Tmarket] {FF4C4C}Ошибка при загрузке файла конфигурации.", -1)
             callback()
         end
     end)
@@ -349,20 +378,21 @@ function main()
     repeat cachedNick = getNicknameSafe() wait(500) until cachedNick
     cachedNick = cachedNick:gsub("^%[%d+%]", "")
 
-    checkNick(cachedNick, function(hasAccess)
-        if hasAccess then
+    checkNick(cachedNick, function(accessResult)
+        if accessResult and not scriptExpired then
             downloadConfigFile(function()
                 loadData()
                 applyConversionRates()
                 sampAddChatMessage(string.format("{A47AFF}[Tmarket]{FFFFFF} загружен  |  Активация: {A47AFF}/tm{FFFFFF}  |  Версия: {A47AFF}v%s{FFFFFF}  |  Автор: {FFD700}legacy.", thisScript().version), -1)
+                -- Убрано сообщение о сроке действия в чат
                 sampRegisterChatCommand("tm", function()
                     if window[0] then saveData() end
                     window[0] = not window[0]
                 end)
                 checkUpdates()
             end)
-        else
-            -- Сообщение об отсутствии доступа или истечении срока действия уже выведено в checkNick
+        elseif not accessResult and not scriptExpired then
+            -- Сообщение об отсутствии доступа уже выведено в checkNick
         end
     end)
 
@@ -374,9 +404,7 @@ function main()
     end)
 
     imgui.OnFrame(function()
-        -- Если hasAccess стал false после загрузки, окно не должно открываться.
-        -- Проверка на window[0] означает, что окно активно.
-        return window[0] and not (isPauseMenuActive() or isGamePaused() or sampIsDialogActive())
+        return window[0] and not (isPauseMenuActive() or isGamePaused() or sampIsDialogActive()) and hasScriptAccess and not scriptExpired
     end, function()
         local resX, resY = getScreenResolution()
         if not windowPos.x or not windowPos.y then
@@ -386,25 +414,25 @@ function main()
         end
         imgui.SetNextWindowSize(imgui.ImVec2(windowSize.x, windowSize.y), imgui.Cond.Once)
 
-        if not imgui.Begin(u8("Tmarket — Таблица цен v" .. thisScript().version .. ". Автор — legacy."), window) then
+       local windowTitle = u8("Tmarket | " .. thisScript().version)
+       -- Добавляем дату истечения в заголовок окна
+       if accessExpirationDate then
+           windowTitle = windowTitle .. u8(" | Доступ до: ") .. u8(accessExpirationDate)
+       end
+
+       if not imgui.Begin(windowTitle, window) then
             imgui.End()
             return
         end
 
         local pos = imgui.GetWindowPos()
         local size = imgui.GetWindowSize()
-        -- Сохраняем настройки окна только при его закрытии или изменении
-        -- Это позволяет избежать постоянной перезаписи файла при движении окна
-        if imgui.IsMouseReleased(0) and imgui.IsWindowHovered() then
-             saveWindowSettings(pos.x, pos.y, size.x, size.y)
-        end
+        saveWindowSettings(pos.x, pos.y, size.x, size.y)
 
         if lastWindowSize.x ~= size.x or lastWindowSize.y ~= size.y then
             lastWindowSize.x = size.x
             lastWindowSize.y = size.y
-            saveWindowSettings(pos.x, pos.y, size.x, size.y) -- Сохраняем при изменении размера
         end
-
 
         local fullWidth = size.x - 40
         local searchWidth = fullWidth * 0.52
@@ -422,7 +450,7 @@ function main()
             downloadConfigFile(function()
                 loadData()
                 applyConversionRates()
-                sampAddChatMessage("{A47AFF}[Tmarket] {90EE90}Цены успешно обновлены.{FFFFFF}.", -1)
+                sampAddChatMessage("{A47AFF}[Tmarket] {FFFFFF}Цены успешно обновлены.{FFFFFF}.", -1)
             end)
         end
 
@@ -440,9 +468,6 @@ function main()
             if num and num > 0 then
                 conversionRateBuy = num
                 applyConversionRates()
-            else
-                -- Если введено некорректное значение, возвращаем предыдущее
-                ffi.copy(conversionRateBuyBuf, u8(tostring(conversionRateBuy)))
             end
             buyInputChanged = false
         end
@@ -461,9 +486,6 @@ function main()
             if num and num > 0 then
                 conversionRateSell = num
                 applyConversionRates()
-            else
-                -- Если введено некорректное значение, возвращаем предыдущее
-                ffi.copy(conversionRateSellBuf, u8(tostring(conversionRateSell)))
             end
             sellInputChanged = false
         end
@@ -519,7 +541,7 @@ function main()
                 imgui.SetCursorPosX(cursorStart + (columnWidth - inputFieldWidth) / 2)
                 if imgui.InputText("##buy" .. i, v.buy_buf, ffi.sizeof(v.buy_buf)) then
                     v.buy = decode(v.buy_buf)
-                    -- v.buy_orig = v.buy -- Если меняем в InputText, то buy_orig тоже должен измениться для сохранения
+                    v.buy_orig = v.buy
                 end
                 imgui.NextColumn()
 
@@ -527,7 +549,7 @@ function main()
                 imgui.SetCursorPosX(cursorStart + (columnWidth - inputFieldWidth) / 2)
                 if imgui.InputText("##sell" .. i, v.sell_buf, ffi.sizeof(v.sell_buf)) then
                     v.sell = decode(v.sell_buf)
-                    -- v.sell_orig = v.sell -- Если меняем в InputText, то sell_orig тоже должен измениться для сохранения
+                    v.sell_orig = v.sell
                 end
                 imgui.NextColumn()
 
