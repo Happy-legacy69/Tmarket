@@ -1,6 +1,6 @@
 script_name("Tmarket")
 script_author("legacy.")
-script_version("1.03")
+script_version("1.04")
 
 local ffi = require("ffi")
 local encoding = require("encoding")
@@ -176,7 +176,6 @@ function checkUpdates()
                 if scriptExpired or not hasScriptAccess then return end
 
                 if newVersion > currentVersion then
-                    sampAddChatMessage("{A47AFF}[Tmarket]{90EE90} Доступна новая версия скрипта. Идёт обновление...", -1)
                     downloadUrlToFile(data.download, thisScript().path, function(id, status)
                         if status == moonloader.download_status.STATUSEX_ENDDOWNLOAD then
                             sampAddChatMessage("{A47AFF}[Tmarket]{90EE90} Скрипт обновлён.", -1)
@@ -417,7 +416,7 @@ function main()
        local windowTitle = u8("Tmarket | " .. thisScript().version)
        -- Добавляем дату истечения в заголовок окна
        if accessExpirationDate then
-           windowTitle = windowTitle .. u8(" | Доступ до: ") .. u8(accessExpirationDate)
+           windowTitle = windowTitle ..(" | ") .. u8(accessExpirationDate)
        end
 
        if not imgui.Begin(windowTitle, window) then
